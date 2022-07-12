@@ -1,55 +1,67 @@
-//SPDX-License-Identifier: Unlicense
+// SPDX-License-Identifier: MIT
+// OpenZeppelin Contracts (last updated v4.7.0) (utils/escrow/Escrow.sol)
+
 pragma solidity ^0.8.0;
-import "hardhat/console.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract Escrow {
-    IERC20 public _token;
+import "./Ownable.sol";
+import "./Address.sol";
 
-    constructor(address ERC20Address) {
-        _token = IERC20(ERC20Address);
+/**
+ * @title Escrow
+ * @dev Base escrow contract, holds funds designated for a payee until they
+ * withdraw them.
+ *
+ * Intended usage: This contract (and derived escrow contracts) should be a
+ * standalone contract, that only interacts with the contract that instantiated
+ * it. That way, it is guaranteed that all Ether will be handled according to
+ * the `Escrow` rules, and there is no need to check for payable functions or
+ * transfers in the inheritance tree. The contract that uses the escrow as its
+ * payment method should be its owner, and provide public methods redirecting
+ * to the escrow's deposit and withdraw.
+ */
+contract Escrow is Ownable {
+    using Address for address payable;
+
+    event Deposited(address indexed payee, uint256 weiAmount);
+    event Withdrawn(address indexed payee, uint256 weiAmount);
+
+    mapping(address => uint256) private _deposits;
+
+    function depositsOf(address payee) public view returns (uint256) {
+        return _deposits[payee];
     }
 
-    uint256 deposit_count;
-    mapping(bytes32 => uint256) balances;
-
-    function depositEscrow(bytes32 txn_hash, uint256 amount) external {
-        // Transaction hash cannot be empty
-        require(txn_hash[0] != 0, "Transaction has cannot be empty!");
-        // Escrow amount cannot be equal to 0
-        require(amount != 0, "Escrow amount cannot be equal to 0.");
-        // Transaction hash is already in use
-        require(
-            balances[txn_hash] == 0,
-            "Unique hash conflict, hash is already in use."
-        );
-        // Transfer ERC20 token from sender to this contract
-        require(
-            _token.transferFrom(msg.sender, address(this), amount),
-            "Transfer to escrow failed!"
-        );
-        balances[txn_hash] = amount;
-        deposit_count++;
+    /**
+     * @dev Stores the sent amount as credit to be withdrawn.
+     * @param payee The destination address of the funds.
+     *
+     * Emits a {Deposited} event.
+     */
+    function deposit(address payee) public payable virtual onlyOwner {
+        uint256 amount = msg.value;
+        _deposits[payee] += amount;
+        emit Deposited(payee, amount);
     }
 
-    function getHash(uint256 amount) public view returns (bytes32 result) {
-        return keccak256(abi.encodePacked(msg.sender, deposit_count, amount));
-    }
+    /**
+     * @dev Withdraw accumulated balance for a payee, forwarding all gas to the
+     * recipient.
+     *
+     * WARNING: Forwarding all gas opens the door to reentrancy vulnerabilities.
+     * Make sure you trust the recipient, or are either following the
+     * checks-effects-interactions pattern or using {ReentrancyGuard}.
+     *
+     * @param payee The address whose funds will be withdrawn and transferred to.
+     *
+     * Emits a {Withdrawn} event.
+     */
+    function withdraw(address payable payee) public virtual onlyOwner {
+        uint256 payment = _deposits[payee];
 
-    function withdrawalEscrow(bytes32 txn_hash) external {
-        // Transaction hash cannot be empty
-        require(txn_hash[0] != 0, "Transaction hash cannot be empty!");
-        // Check if txn_hash exists in balances
-        require(
-            balances[txn_hash] != 0,
-            "Escrow with transaction hash doesn't exist."
-        );
-        // Transfer escrow to sender
-        require(
-            _token.transfer(msg.sender, balances[txn_hash]),
-            "Escrow retrieval failed!"
-        );
-        // If all is done, status is amounted to 0
-        balances[txn_hash] = 0;
+        _deposits[payee] = 0;
+
+        payee.sendValue(payment);
+
+        emit Withdrawn(payee, payment);
     }
 }
